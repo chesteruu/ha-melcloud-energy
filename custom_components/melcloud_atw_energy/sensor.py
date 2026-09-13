@@ -15,6 +15,7 @@ from homeassistant.const import UnitOfEnergy, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import MelCloudEnergyCoordinator
@@ -76,52 +77,46 @@ class AtwSensorDescription(SensorEntityDescription):
     value_fn: Callable[[dict], Any]
 
 
-def _energy(key: str) -> Callable[[dict], Any]:
-    return lambda d: d.get(key)
-
-
 def _st(key: str) -> Callable[[dict], Any]:
     return lambda d: _state(d).get(key)
 
 
-SENSORS: tuple[AtwSensorDescription, ...] = (
-    # --- Energy (from /EnergyCost/Report) ---
+# --- Long-term energy sensors (cumulative, total_increasing) ---
+ENERGY_SENSORS: tuple[AtwSensorDescription, ...] = (
     AtwSensorDescription(
         key=KEY_HEATING, translation_key="heating_today",
-        name="Heating energy today",
+        name="Heating energy",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY, state_class=SensorStateClass.TOTAL,
-        value_fn=_energy(KEY_HEATING),
+        device_class=SensorDeviceClass.ENERGY, state_class=SensorStateClass.TOTAL_INCREASING,
     ),
     AtwSensorDescription(
         key=KEY_HOT_WATER, translation_key="hot_water_today",
-        name="Hot water energy today",
+        name="Hot water energy",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY, state_class=SensorStateClass.TOTAL,
-        value_fn=_energy(KEY_HOT_WATER),
+        device_class=SensorDeviceClass.ENERGY, state_class=SensorStateClass.TOTAL_INCREASING,
     ),
     AtwSensorDescription(
         key=KEY_COOLING, translation_key="cooling_today",
-        name="Cooling energy today",
+        name="Cooling energy",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY, state_class=SensorStateClass.TOTAL,
-        value_fn=_energy(KEY_COOLING),
+        device_class=SensorDeviceClass.ENERGY, state_class=SensorStateClass.TOTAL_INCREASING,
     ),
     AtwSensorDescription(
         key=KEY_TOTAL, translation_key="total_today",
-        name="Total energy today",
+        name="Total energy",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY, state_class=SensorStateClass.TOTAL,
-        value_fn=_energy(KEY_TOTAL),
+        device_class=SensorDeviceClass.ENERGY, state_class=SensorStateClass.TOTAL_INCREASING,
     ),
+)
+
+# --- Plain state/telemetry sensors ---
+SENSORS: tuple[AtwSensorDescription, ...] = (
     AtwSensorDescription(
         key=KEY_COP, translation_key="cop",
         name="Coefficient of performance",
         state_class=SensorStateClass.MEASUREMENT, icon="mdi:heat-pump",
-        value_fn=_energy(KEY_COP),
+        value_fn=lambda d: d.get(KEY_COP),
     ),
-    # --- Temperatures (skip tank/outdoor/room: the built-in melcloud
-    #     integration already provides those, avoid duplicates) ---
     # --- Target temperatures ---
     AtwSensorDescription(
         key=KEY_SET_TANK_TEMP, translation_key="set_tank_temperature",
@@ -244,23 +239,23 @@ async def async_setup_entry(
 ) -> None:
     """Set up ATW sensors."""
     coordinator: MelCloudEnergyCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
+    entities: list[SensorEntity] = [
         MelCloudAtwSensor(coordinator, entry, description)
         for description in SENSORS
-    )
+    ]
+    entities += [
+        MelCloudEnergyAccumulator(coordinator, entry, description)
+        for description in ENERGY_SENSORS
+    ]
+    async_add_entities(entities)
 
 
-class MelCloudAtwSensor(CoordinatorEntity[MelCloudEnergyCoordinator], SensorEntity):
-    """A MELCloud ATW sensor."""
+class AtwEntityMixin:
+    """Shared entity setup for ATW sensors."""
 
     entity_description: AtwSensorDescription
 
-    def __init__(
-        self,
-        coordinator: MelCloudEnergyCoordinator,
-        entry: ConfigEntry,
-        description: AtwSensorDescription,
-    ) -> None:
+    def _setup(self, coordinator, entry, description) -> None:
         super().__init__(coordinator)
         self.entity_description = description
         device_id = entry.data[CONF_DEVICE_ID]
@@ -274,9 +269,97 @@ class MelCloudAtwSensor(CoordinatorEntity[MelCloudEnergyCoordinator], SensorEnti
             model="Ecodan ATW",
         )
 
+
+class MelCloudAtwSensor(AtwEntityMixin, CoordinatorEntity[MelCloudEnergyCoordinator], SensorEntity):
+    """A plain MELCloud ATW sensor."""
+
+    def __init__(self, coordinator, entry, description) -> None:
+        self._setup(coordinator, entry, description)
+
     @property
     def native_value(self) -> Any:
-        """Return the sensor value."""
         if not self.coordinator.data:
             return None
         return self.entity_description.value_fn(self.coordinator.data)
+
+
+class MelCloudEnergyAccumulator(
+    AtwEntityMixin,
+    CoordinatorEntity[MelCloudEnergyCoordinator],
+    SensorEntity,
+    RestoreEntity,
+):
+    """Cumulative energy counter built from MELCloud's daily buckets.
+
+    MELCloud only reports per-day consumption. The HA energy dashboard needs a
+    monotonically increasing total, so we accumulate the daily delta and keep a
+    running total that survives restarts via RestoreEntity.
+    """
+
+    def __init__(self, coordinator, entry, description) -> None:
+        self._setup(coordinator, entry, description)
+        self._total: float = 0.0
+        self._last_daily: float | None = None
+        self._last_date: str | None = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last := await self.async_get_last_state()) is not None:
+            try:
+                self._total = float(last.state)
+            except (ValueError, TypeError):
+                self._total = 0.0
+            attrs = last.attributes
+            self._last_daily = attrs.get("today")
+            self._last_date = attrs.get("today_date")
+
+    @property
+    def _daily_key(self) -> str:
+        return self.entity_description.key
+
+    @property
+    def native_value(self) -> float:
+        return round(self._total, 4)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "today": self._last_daily,
+            "today_date": self._last_date,
+            "yesterday": self._yesterday,
+        }
+
+    @property
+    def _yesterday(self) -> float | None:
+        key = f"{self._daily_key}_yesterday"
+        if self.coordinator.data:
+            return self.coordinator.data.get(key)
+        return None
+
+    def _handle_coordinator_update(self) -> None:
+        import datetime as _dt
+
+        data = self.coordinator.data or {}
+        daily = float(data.get(self._daily_key) or 0.0)
+        today_str = _dt.date.today().isoformat()
+
+        if self._last_date is None:
+            # Cold start with no restored state: seed total with today's value.
+            self._total = daily
+        elif today_str != self._last_date:
+            # Day rolled over: MELCloud's "today" bucket reset to the new day.
+            self._total += daily
+        else:
+            # Same day: adjust for the increase since the last poll.
+            prev_daily = self._last_daily or 0.0
+            if daily >= prev_daily:
+                self._total += daily - prev_daily
+            # If it decreased (MELCloud recomputed), ignore; next day handles it.
+
+        self._last_daily = daily
+        self._last_date = today_str
+        self.async_write_ha_state()
+
+    async def async_update(self) -> None:
+        # Not used; the coordinator drives updates via _handle_coordinator_update.
+        return None

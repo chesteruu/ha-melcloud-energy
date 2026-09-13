@@ -138,7 +138,8 @@ def extract_latest(report: dict) -> dict:
     """Extract consumed energy from a MELCloud report.
 
     MELCloud returns one bucket per day; the last bucket is the current day
-    (today). We expose today's value plus the previous completed day.
+    (today). We expose today's value plus the previous completed day, and a
+    30-day trailing cumulative sum (for reference).
     """
     def at(key: str, idx: int) -> float | None:
         arr = report.get(key)
@@ -153,6 +154,9 @@ def extract_latest(report: dict) -> dict:
 
     def yesterday(key: str) -> float:
         return at(key, -2) or 0.0
+
+    def days_ago(key: str, n: int) -> float:
+        return at(key, -(n + 1)) or 0.0
 
     heating = today("Heating")
     hot_water = today("HotWater")
@@ -174,5 +178,8 @@ def extract_latest(report: dict) -> dict:
         "heating_yesterday": yesterday("Heating"),
         "hot_water_yesterday": yesterday("HotWater"),
         "cooling_yesterday": yesterday("Cooling"),
+        "heating_2days": days_ago("Heating", 2),
+        "hot_water_2days": days_ago("HotWater", 2),
+        "cooling_2days": days_ago("Cooling", 2),
         "cop": cop,
     }
