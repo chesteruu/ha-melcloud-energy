@@ -72,9 +72,13 @@ def _state(data: dict) -> dict:
 
 @dataclass(frozen=True, kw_only=True)
 class AtwSensorDescription(SensorEntityDescription):
-    """Describes an ATW sensor."""
+    """Describes an ATW sensor.
 
-    value_fn: Callable[[dict], Any]
+    ``value_fn`` is optional: accumulator energy sensors derive their value
+    from their own running total, so they leave it unset (``None``).
+    """
+
+    value_fn: Callable[[dict], Any] | None = None
 
 
 def _st(key: str) -> Callable[[dict], Any]:
@@ -280,7 +284,10 @@ class MelCloudAtwSensor(AtwEntityMixin, CoordinatorEntity[MelCloudEnergyCoordina
     def native_value(self) -> Any:
         if not self.coordinator.data:
             return None
-        return self.entity_description.value_fn(self.coordinator.data)
+        value_fn = self.entity_description.value_fn
+        if value_fn is None:
+            return None
+        return value_fn(self.coordinator.data)
 
 
 class MelCloudEnergyAccumulator(
