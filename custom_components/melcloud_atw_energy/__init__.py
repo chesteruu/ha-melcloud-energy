@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import MelCloudApiClient, MelCloudAuthError, MelCloudError, extract_latest
 from .const import (
+    CONF_BUILDING_ID,
     CONF_DEVICE_ID,
     CONF_EMAIL,
     CONF_PASSWORD,
@@ -30,7 +31,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = async_get_clientsession(hass)
     client = MelCloudApiClient(session, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
 
-    coordinator = MelCloudEnergyCoordinator(hass, client, entry.data[CONF_DEVICE_ID])
+    coordinator = MelCloudEnergyCoordinator(
+        hass, client, entry.data[CONF_DEVICE_ID], entry.data.get(CONF_BUILDING_ID)
+    )
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
@@ -49,7 +52,11 @@ class MelCloudEnergyCoordinator(DataUpdateCoordinator[dict]):
     """Fetch ATW energy consumption from MELCloud."""
 
     def __init__(
-        self, hass: HomeAssistant, client: MelCloudApiClient, device_id: int
+        self,
+        hass: HomeAssistant,
+        client: MelCloudApiClient,
+        device_id: int,
+        building_id: int | None = None,
     ) -> None:
         super().__init__(
             hass,
@@ -59,6 +66,7 @@ class MelCloudEnergyCoordinator(DataUpdateCoordinator[dict]):
         )
         self._client = client
         self._device_id = device_id
+        self._building_id = building_id
         self._logged_in = False
 
     async def _async_update_data(self) -> dict:
@@ -67,6 +75,9 @@ class MelCloudEnergyCoordinator(DataUpdateCoordinator[dict]):
                 await self._client.async_login()
                 self._logged_in = True
             report = await self._client.async_energy_report(self._device_id)
+            state = await self._client.async_device_state(
+                self._device_id, self._building_id
+            )
         except MelCloudAuthError as err:
             self._logged_in = False
             raise UpdateFailed(f"auth error: {err}") from err
@@ -74,5 +85,5 @@ class MelCloudEnergyCoordinator(DataUpdateCoordinator[dict]):
             raise UpdateFailed(str(err)) from err
 
         data = extract_latest(report)
-        data["_raw"] = report
+        data["_raw"], data["_state"] = report, state
         return data

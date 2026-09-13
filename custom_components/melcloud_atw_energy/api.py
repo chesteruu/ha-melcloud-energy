@@ -124,6 +124,15 @@ class MelCloudApiClient:
             raise MelCloudError("Unexpected energy report payload")
         return data
 
+    async def async_device_state(self, device_id: int, building_id: int) -> dict:
+        """Fetch the live device state (status/targets/telemetry)."""
+        data = await self._get(
+            f"/Device/Get?id={device_id}&buildingID={building_id}"
+        )
+        if not isinstance(data, dict):
+            raise MelCloudError("Unexpected device state payload")
+        return data
+
 
 def extract_latest(report: dict) -> dict:
     """Extract consumed energy from a MELCloud report.

@@ -6,7 +6,7 @@
         "description": "Enter your MELCloud account credentials",
         "data": {
           "email": "Email",
-          "password": "Password"
+          "password": "***"
         }
       },
       "device": {
@@ -33,7 +33,32 @@
       "hot_water_today": { "name": "Hot water energy today" },
       "cooling_today": { "name": "Cooling energy today" },
       "total_today": { "name": "Total energy today" },
-      "cop": { "name": "Coefficient of performance" }
+      "cop": { "name": "Coefficient of performance" },
+      "tank_temperature": { "name": "Tank temperature" },
+      "outdoor_temperature": { "name": "Outdoor temperature" },
+      "room_temperature_zone1": { "name": "Room temperature (Zone 1)" },
+      "room_temperature_zone2": { "name": "Room temperature (Zone 2)" },
+      "set_tank_temperature": { "name": "Target tank temperature" },
+      "set_temperature_zone1": { "name": "Target temperature (Zone 1)" },
+      "set_temperature_zone2": { "name": "Target temperature (Zone 2)" },
+      "set_heat_flow_zone1": { "name": "Target heat flow (Zone 1)" },
+      "operation_mode": { "name": "Operation mode" },
+      "operation_mode_zone1": { "name": "Operation mode (Zone 1)" },
+      "operation_mode_zone2": { "name": "Operation mode (Zone 2)" },
+      "power": { "name": "Power" },
+      "eco_hot_water": { "name": "Eco hot water" },
+      "forced_hot_water": { "name": "Forced hot water mode" },
+      "holiday_mode": { "name": "Holiday mode" },
+      "idle_zone1": { "name": "Idle (Zone 1)" },
+      "idle_zone2": { "name": "Idle (Zone 2)" },
+      "prohibit_zone1": { "name": "Prohibit (Zone 1)" },
+      "prohibit_zone2": { "name": "Prohibit (Zone 2)" },
+      "prohibit_hot_water": { "name": "Prohibit hot water" },
+      "demand_percentage": { "name": "Demand percentage" },
+      "error_code": { "name": "Error code" },
+      "unit_status": { "name": "Unit status" },
+      "offline": { "name": "Offline" },
+      "last_communication": { "name": "Last communication" }
     }
   }
 }
