@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MELCloud ATW Energy",
+        "description": "Enter your MELCloud account credentials",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "device": {
+        "title": "Select heat pump",
+        "description": "Choose the air-to-water heat pump to monitor",
+        "data": {
+          "device_id": "Device"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid authentication",
+      "cannot_connect": "Failed to connect to MELCloud",
+      "no_atw_device": "No air-to-water heat pump found on this account",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This heat pump is already configured"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "heating_today": { "name": "Heating energy today" },
+      "hot_water_today": { "name": "Hot water energy today" },
+      "cooling_today": { "name": "Cooling energy today" },
+      "total_today": { "name": "Total energy today" },
+      "cop": { "name": "Coefficient of performance" }
+    }
+  }
+}
