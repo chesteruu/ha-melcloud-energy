@@ -39,18 +39,14 @@ from .const import (
     KEY_OPERATION_MODE,
     KEY_OPERATION_MODE_ZONE1,
     KEY_OPERATION_MODE_ZONE2,
-    KEY_OUTDOOR_TEMP,
     KEY_POWER,
     KEY_PROHIBIT_HOT_WATER,
     KEY_PROHIBIT_ZONE1,
     KEY_PROHIBIT_ZONE2,
-    KEY_ROOM_TEMP_ZONE1,
-    KEY_ROOM_TEMP_ZONE2,
     KEY_SET_HEAT_FLOW_ZONE1,
     KEY_SET_TANK_TEMP,
     KEY_SET_TEMP_ZONE1,
     KEY_SET_TEMP_ZONE2,
-    KEY_TANK_TEMP,
     KEY_TOTAL,
     KEY_UNIT_STATUS,
     MANUFACTURER,
@@ -124,35 +120,8 @@ SENSORS: tuple[AtwSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT, icon="mdi:heat-pump",
         value_fn=_energy(KEY_COP),
     ),
-    # --- Temperatures (from /Device/Get) ---
-    AtwSensorDescription(
-        key=KEY_TANK_TEMP, translation_key="tank_temperature",
-        name="Tank temperature",
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        device_class=SensorDeviceClass.TEMPERATURE, state_class=SensorStateClass.MEASUREMENT,
-        value_fn=_st("TankWaterTemperature"),
-    ),
-    AtwSensorDescription(
-        key=KEY_OUTDOOR_TEMP, translation_key="outdoor_temperature",
-        name="Outdoor temperature",
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        device_class=SensorDeviceClass.TEMPERATURE, state_class=SensorStateClass.MEASUREMENT,
-        value_fn=_st("OutdoorTemperature"),
-    ),
-    AtwSensorDescription(
-        key=KEY_ROOM_TEMP_ZONE1, translation_key="room_temperature_zone1",
-        name="Room temperature (Zone 1)",
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        device_class=SensorDeviceClass.TEMPERATURE, state_class=SensorStateClass.MEASUREMENT,
-        value_fn=_st("RoomTemperatureZone1"),
-    ),
-    AtwSensorDescription(
-        key=KEY_ROOM_TEMP_ZONE2, translation_key="room_temperature_zone2",
-        name="Room temperature (Zone 2)",
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        device_class=SensorDeviceClass.TEMPERATURE, state_class=SensorStateClass.MEASUREMENT,
-        value_fn=_st("RoomTemperatureZone2"),
-    ),
+    # --- Temperatures (skip tank/outdoor/room: the built-in melcloud
+    #     integration already provides those, avoid duplicates) ---
     # --- Target temperatures ---
     AtwSensorDescription(
         key=KEY_SET_TANK_TEMP, translation_key="set_tank_temperature",
