@@ -106,13 +106,14 @@ class MelCloudApiClient:
                 })
         return out
 
-    async def async_energy_report(self, device_id: int, days_back: int = 45) -> dict:
+    async def async_energy_report(self, device_id: int, days_back: int = 28) -> dict:
         """Fetch the ATW energy report.
 
-        MELCloud returns one bucket per calendar day. We request a wide window
-        (default ~45 days back through tomorrow) so the cumulative counters in
-        the HA energy dashboard can be backfilled with real history rather than
-        only the last couple of days.
+        MELCloud returns one bucket per calendar day, but it silently truncates
+        the response to ~2 buckets when the requested span is too wide (in our
+        testing anything beyond ~30 days collapses to the last 2 days). We
+        therefore cap the window at 28 days, which reliably returns a full four
+        weeks of history for the HA energy dashboard to backfill from.
         """
         today = datetime.date.today()
         from_str = (today - datetime.timedelta(days=days_back)).strftime("%Y-%m-%d")
