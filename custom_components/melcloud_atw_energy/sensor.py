@@ -296,18 +296,19 @@ class MelCloudEnergyAccumulator(
     SensorEntity,
     RestoreEntity,
 ):
-    """Cumulative energy counter built from MELCloud's daily buckets.
+    """Cumulative energy counter for the HA energy dashboard.
 
-    MELCloud only reports per-day consumption. The HA energy dashboard needs a
-    monotonically increasing total, so we accumulate the daily delta and keep a
-    running total that survives restarts via RestoreEntity.
+    MELCloud only reports per-day consumption, but the energy dashboard needs a
+    monotonically increasing counter. The coordinator now sums every day in a
+    ~45-day window (see ``extract_latest``), so we take that cumulative total as
+    our value and never let it go backwards. This backfills real history
+    (e.g. 9/18-9/20) instead of discarding it.
     """
 
     def __init__(self, coordinator, entry, description) -> None:
         self._setup(coordinator, entry, description)
         self._total: float = 0.0
-        self._last_daily: float | None = None
-        self._last_date: str | None = None
+        self._high_water: float = 0.0
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -316,13 +317,15 @@ class MelCloudEnergyAccumulator(
                 self._total = float(last.state)
             except (ValueError, TypeError):
                 self._total = 0.0
-            attrs = last.attributes
-            self._last_daily = attrs.get("today")
-            self._last_date = attrs.get("today_date")
+            self._high_water = self._total
 
     @property
     def _daily_key(self) -> str:
         return self.entity_description.key
+
+    @property
+    def _cumulative_key(self) -> str:
+        return f"{self.entity_description.key}_cumulative"
 
     @property
     def native_value(self) -> float:
@@ -331,10 +334,30 @@ class MelCloudEnergyAccumulator(
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
-            "today": self._last_daily,
-            "today_date": self._last_date,
+            "today": self._today,
+            "today_date": self._today_date,
             "yesterday": self._yesterday,
+            "cumulative": self._cumulative,
+            "window_days": self._window_days,
         }
+
+    @property
+    def _cumulative(self) -> float | None:
+        if self.coordinator.data:
+            return self.coordinator.data.get(self._cumulative_key)
+        return None
+
+    @property
+    def _today(self) -> float | None:
+        if self.coordinator.data:
+            return self.coordinator.data.get(self._daily_key)
+        return None
+
+    @property
+    def _today_date(self) -> str | None:
+        import datetime as _dt
+
+        return _dt.date.today().isoformat()
 
     @property
     def _yesterday(self) -> float | None:
@@ -343,28 +366,21 @@ class MelCloudEnergyAccumulator(
             return self.coordinator.data.get(key)
         return None
 
+    @property
+    def _window_days(self) -> int | None:
+        if self.coordinator.data:
+            return self.coordinator.data.get("window_days")
+        return None
+
     def _handle_coordinator_update(self) -> None:
-        import datetime as _dt
-
         data = self.coordinator.data or {}
-        daily = float(data.get(self._daily_key) or 0.0)
-        today_str = _dt.date.today().isoformat()
-
-        if self._last_date is None:
-            # Cold start with no restored state: seed total with today's value.
-            self._total = daily
-        elif today_str != self._last_date:
-            # Day rolled over: MELCloud's "today" bucket reset to the new day.
-            self._total += daily
-        else:
-            # Same day: adjust for the increase since the last poll.
-            prev_daily = self._last_daily or 0.0
-            if daily >= prev_daily:
-                self._total += daily - prev_daily
-            # If it decreased (MELCloud recomputed), ignore; next day handles it.
-
-        self._last_daily = daily
-        self._last_date = today_str
+        cumulative = data.get(self._cumulative_key)
+        if cumulative is not None:
+            cumulative = float(cumulative)
+            # Monotonic guard: never regress below the highest value we've seen.
+            if cumulative > self._high_water:
+                self._high_water = cumulative
+            self._total = self._high_water
         self.async_write_ha_state()
 
     async def async_update(self) -> None:

@@ -106,11 +106,17 @@ class MelCloudApiClient:
                 })
         return out
 
-    async def async_energy_report(self, device_id: int) -> dict:
-        """Fetch the ATW energy report (today + adjacent days)."""
+    async def async_energy_report(self, device_id: int, days_back: int = 45) -> dict:
+        """Fetch the ATW energy report.
+
+        MELCloud returns one bucket per calendar day. We request a wide window
+        (default ~45 days back through tomorrow) so the cumulative counters in
+        the HA energy dashboard can be backfilled with real history rather than
+        only the last couple of days.
+        """
         today = datetime.date.today()
-        from_str = (today - datetime.timedelta(days=2)).strftime("%Y-%m-%d")
-        to_str = (today + datetime.timedelta(days=2)).strftime("%Y-%m-%d")
+        from_str = (today - datetime.timedelta(days=days_back)).strftime("%Y-%m-%d")
+        to_str = (today + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
         data = await self._post(
             "/EnergyCost/Report",
             {
@@ -134,12 +140,30 @@ class MelCloudApiClient:
         return data
 
 
+def _series(report: dict, key: str) -> list[float]:
+    """Return a report column as a clean list of floats (None -> 0.0)."""
+    arr = report.get(key)
+    if not isinstance(arr, list):
+        return []
+    out: list[float] = []
+    for v in arr:
+        try:
+            out.append(float(v) if v is not None else 0.0)
+        except (TypeError, ValueError):
+            out.append(0.0)
+    return out
+
+
 def extract_latest(report: dict) -> dict:
     """Extract consumed energy from a MELCloud report.
 
-    MELCloud returns one bucket per day; the last bucket is the current day
-    (today). We expose today's value plus the previous completed day, and a
-    30-day trailing cumulative sum (for reference).
+    MELCloud returns one bucket per calendar day (oldest first). We expose:
+
+    * today's value (last bucket) plus the previous completed day, and
+    * a per-category cumulative sum over the whole returned window, which the
+      accumulated sensors seed their counters from. This backfills real
+      history into the HA energy dashboard instead of losing it whenever the
+      fetch window is narrow.
     """
     def at(key: str, idx: int) -> float | None:
         arr = report.get(key)
@@ -158,6 +182,17 @@ def extract_latest(report: dict) -> dict:
     def days_ago(key: str, n: int) -> float:
         return at(key, -(n + 1)) or 0.0
 
+    # Per-day series over the whole window.
+    heating_arr = _series(report, "Heating")
+    hot_water_arr = _series(report, "HotWater")
+    cooling_arr = _series(report, "Cooling")
+
+    # Cumulative-through-today totals (sum of every completed day + today).
+    heating_total = round(sum(heating_arr), 4)
+    hot_water_total = round(sum(hot_water_arr), 4)
+    cooling_total = round(sum(cooling_arr), 4)
+    window_days = max(len(heating_arr), len(hot_water_arr), len(cooling_arr))
+
     heating = today("Heating")
     hot_water = today("HotWater")
     cooling = today("Cooling")
@@ -175,6 +210,12 @@ def extract_latest(report: dict) -> dict:
         "hot_water": hot_water,
         "cooling": cooling,
         "total": heating + hot_water + cooling,
+        # Cumulative counters for the energy dashboard.
+        "heating_cumulative": heating_total,
+        "hot_water_cumulative": hot_water_total,
+        "cooling_cumulative": cooling_total,
+        "total_cumulative": round(heating_total + hot_water_total + cooling_total, 4),
+        "window_days": window_days,
         "heating_yesterday": yesterday("Heating"),
         "hot_water_yesterday": yesterday("HotWater"),
         "cooling_yesterday": yesterday("Cooling"),
