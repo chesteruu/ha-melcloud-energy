@@ -71,9 +71,11 @@ class MelCloudEnergyCoordinator(DataUpdateCoordinator[dict]):
 
     async def _async_update_data(self) -> dict:
         try:
-            if not self._logged_in:
-                await self._client.async_login()
-                self._logged_in = True
+            # Re-authenticate on every poll. MELCloud serves a stale context key
+            # only the most recent ~2 energy buckets; a fresh login returns the
+            # full 28-day window. Logins are cheap, so always refresh.
+            await self._client.async_login()
+            self._logged_in = True
             report = await self._client.async_energy_report(self._device_id)
             state = await self._client.async_device_state(
                 self._device_id, self._building_id
