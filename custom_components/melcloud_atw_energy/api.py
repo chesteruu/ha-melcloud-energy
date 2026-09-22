@@ -110,11 +110,19 @@ class MelCloudApiClient:
         """Fetch the ATW energy report.
 
         MELCloud returns one bucket per calendar day, but it silently truncates
-        the response to ~2 buckets when the requested span is too wide (in our
-        testing anything beyond ~30 days collapses to the last 2 days). We
-        therefore cap the window at 28 days, which reliably returns a full four
-        weeks of history for the HA energy dashboard to backfill from.
+        the response to 2 buckets whenever the requested span is too wide. This
+        is a server-side limit that depends purely on the calendar span, NOT on
+        the context key: measured 2026-09-22, a fresh login with a 46-day window
+        still collapsed to 2 buckets, while a 22-day window returned 22 buckets
+        on the same key. Widening the window (or re-logging in per poll) does not
+        recover older data.
+
+        We therefore cap the window at 28 days, which sits inside the stable
+        range and reliably returns a full four weeks of history for the HA
+        energy dashboard to backfill from. Older history is accumulated
+        locally by the counter sensors instead of being re-fetched.
         """
+        days_back = min(days_back, 28)
         today = datetime.date.today()
         from_str = (today - datetime.timedelta(days=days_back)).strftime("%Y-%m-%d")
         to_str = (today + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
@@ -165,6 +173,10 @@ def extract_latest(report: dict) -> dict:
       accumulated sensors seed their counters from. This backfills real
       history into the HA energy dashboard instead of losing it whenever the
       fetch window is narrow.
+
+    NOTE: the window is capped at 28 days (see ``async_energy_report``), so the
+    cumulative figure only covers that span. The counter sensors keep their own
+    monotonic high-water mark and are never reset by a window change.
     """
     def at(key: str, idx: int) -> float | None:
         arr = report.get(key)

@@ -299,10 +299,10 @@ class MelCloudEnergyAccumulator(
     """Cumulative energy counter for the HA energy dashboard.
 
     MELCloud only reports per-day consumption, but the energy dashboard needs a
-    monotonically increasing counter. The coordinator now sums every day in a
-    ~45-day window (see ``extract_latest``), so we take that cumulative total as
-    our value and never let it go backwards. This backfills real history
-    (e.g. 9/18-9/20) instead of discarding it.
+    monotonically increasing counter. The coordinator sums every day in the
+    28-day window (see ``extract_latest``), so we take that cumulative total as
+    our value and never let it go backwards. This backfills real history instead
+    of discarding it.
     """
 
     def __init__(self, coordinator, entry, description) -> None:
