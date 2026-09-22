@@ -195,16 +195,18 @@ def extract_latest(report: dict) -> dict:
     def days_ago(key: str, n: int) -> float:
         return at(key, -(n + 1)) or 0.0
 
-    # Per-day series over the whole window.
+    # Per-day series over the whole window (oldest first).
     heating_arr = _series(report, "Heating")
     hot_water_arr = _series(report, "HotWater")
     cooling_arr = _series(report, "Cooling")
 
-    # Cumulative-through-today totals (sum of every completed day + today).
-    heating_total = round(sum(heating_arr), 4)
-    hot_water_total = round(sum(hot_water_arr), 4)
-    cooling_total = round(sum(cooling_arr), 4)
+    # Bucket dates: MELCloud returns one bucket per calendar day ending today.
     window_days = max(len(heating_arr), len(hot_water_arr), len(cooling_arr))
+    _today = datetime.date.today()
+    bucket_dates = [
+        (_today - datetime.timedelta(days=window_days - 1 - i)).isoformat()
+        for i in range(window_days)
+    ]
 
     heating = today("Heating")
     hot_water = today("HotWater")
@@ -223,11 +225,13 @@ def extract_latest(report: dict) -> dict:
         "hot_water": hot_water,
         "cooling": cooling,
         "total": heating + hot_water + cooling,
-        # Cumulative counters for the energy dashboard.
-        "heating_cumulative": heating_total,
-        "hot_water_cumulative": hot_water_total,
-        "cooling_cumulative": cooling_total,
-        "total_cumulative": round(heating_total + hot_water_total + cooling_total, 4),
+        # Per-day series (available for the accumulator sensors to integrate
+        # day-by-day rather than using a rolling window sum as the counter).
+        "heating_daily": heating_arr,
+        "hot_water_daily": hot_water_arr,
+        "cooling_daily": cooling_arr,
+        # The day each bucket corresponds to, oldest first.
+        "bucket_dates": bucket_dates,
         "window_days": window_days,
         "heating_yesterday": yesterday("Heating"),
         "hot_water_yesterday": yesterday("HotWater"),

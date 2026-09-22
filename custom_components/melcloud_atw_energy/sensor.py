@@ -1,6 +1,7 @@
 """Sensor platform for MELCloud ATW Energy."""
 from __future__ import annotations
 
+import datetime as _dt
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -296,36 +297,66 @@ class MelCloudEnergyAccumulator(
     SensorEntity,
     RestoreEntity,
 ):
-    """Cumulative energy counter for the HA energy dashboard.
+    """True cumulative energy counter for the HA energy dashboard.
 
     MELCloud only reports per-day consumption, but the energy dashboard needs a
-    monotonically increasing counter. The coordinator sums every day in the
-    28-day window (see ``extract_latest``), so we take that cumulative total as
-    our value and never let it go backwards. This backfills real history instead
-    of discarding it.
+    monotonically increasing counter. A rolling *window sum* must NOT be used as
+    that counter: on first attach the dashboard would read the whole window as
+    "today's consumption" (e.g. a 90 kWh spike), and while the window slides the
+    value would rise and fall, corrupting long-term statistics.
+
+    Instead we integrate day-by-day: we keep a running total plus the last day we
+    have already accounted for, and only add days we have not counted yet. The
+    total is persisted across restarts via RestoreEntity and never decreases.
+
+    On the very first attach (no persisted state) the total is seeded with every
+    *completed* day in the fetch window, excluding today. Today's bucket is only
+    added on a later update once MELCloud has finalised it (i.e. once its date
+    is no longer today), so the dashboard never sees the current day's value
+    jump in twice.
     """
 
     def __init__(self, coordinator, entry, description) -> None:
         self._setup(coordinator, entry, description)
         self._total: float = 0.0
-        self._high_water: float = 0.0
+        self._last_date: str | None = None  # last calendar day already counted
+        self._seeded: bool = False
+
+    # --- persistence -----------------------------------------------------
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        if (last := await self.async_get_last_state()) is not None:
+        last = await self.async_get_last_state()
+        if last is not None:
             try:
                 self._total = float(last.state)
             except (ValueError, TypeError):
                 self._total = 0.0
-            self._high_water = self._total
+            self._last_date = last.attributes.get("last_counted_date")
+            self._seeded = True
+
+    # --- helpers ---------------------------------------------------------
 
     @property
     def _daily_key(self) -> str:
         return self.entity_description.key
 
     @property
-    def _cumulative_key(self) -> str:
-        return f"{self.entity_description.key}_cumulative"
+    def _series_key(self) -> str:
+        # api.extract_latest exposes per-day arrays under <key>_daily.
+        return f"{self.entity_description.key}_daily"
+
+    def _daily_series(self) -> list[float]:
+        if not self.coordinator.data:
+            return []
+        arr = self.coordinator.data.get(self._series_key)
+        return list(arr) if isinstance(arr, list) else []
+
+    def _bucket_dates(self) -> list[str]:
+        if not self.coordinator.data:
+            return []
+        arr = self.coordinator.data.get("bucket_dates")
+        return list(arr) if isinstance(arr, list) else []
 
     @property
     def native_value(self) -> float:
@@ -335,17 +366,11 @@ class MelCloudEnergyAccumulator(
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
             "today": self._today,
-            "today_date": self._today_date,
+            "today_date": _dt.date.today().isoformat(),
             "yesterday": self._yesterday,
-            "cumulative": self._cumulative,
+            "last_counted_date": self._last_date,
             "window_days": self._window_days,
         }
-
-    @property
-    def _cumulative(self) -> float | None:
-        if self.coordinator.data:
-            return self.coordinator.data.get(self._cumulative_key)
-        return None
 
     @property
     def _today(self) -> float | None:
@@ -354,16 +379,9 @@ class MelCloudEnergyAccumulator(
         return None
 
     @property
-    def _today_date(self) -> str | None:
-        import datetime as _dt
-
-        return _dt.date.today().isoformat()
-
-    @property
     def _yesterday(self) -> float | None:
-        key = f"{self._daily_key}_yesterday"
         if self.coordinator.data:
-            return self.coordinator.data.get(key)
+            return self.coordinator.data.get(f"{self._daily_key}_yesterday")
         return None
 
     @property
@@ -372,15 +390,51 @@ class MelCloudEnergyAccumulator(
             return self.coordinator.data.get("window_days")
         return None
 
+    # --- integration -----------------------------------------------------
+
+    def _integrate(self) -> None:
+        """Add every not-yet-counted completed day to the running total."""
+        series = self._daily_series()
+        dates = self._bucket_dates()
+        if not series:
+            return
+        today = _dt.date.today().isoformat()
+
+        # Align dates with series (both oldest-first, same length). If dates are
+        # missing, fall back to positional alignment assuming the last bucket is
+        # today (MELCloud returns one bucket per calendar day, oldest first).
+        if len(dates) != len(series):
+            n = len(series)
+            dates = [
+                (_dt.date.today() - _dt.timedelta(days=n - 1 - i)).isoformat()
+                for i in range(n)
+            ]
+
+        if not self._seeded:
+            # First attach: seed with all completed days (everything but today).
+            seed = 0.0
+            last = None
+            for d, v in zip(dates, series):
+                if d >= today:
+                    continue
+                seed += float(v or 0.0)
+                last = d
+            self._total = round(seed, 4)
+            self._last_date = last
+            self._seeded = True
+            return
+
+        # Subsequent updates: add any completed day newer than the last one we
+        # accounted for. Today's bucket is skipped until it becomes a past day.
+        for d, v in zip(dates, series):
+            if d >= today:
+                continue
+            if self._last_date is None or d > self._last_date:
+                self._total = round(self._total + float(v or 0.0), 4)
+                self._last_date = d
+
     def _handle_coordinator_update(self) -> None:
-        data = self.coordinator.data or {}
-        cumulative = data.get(self._cumulative_key)
-        if cumulative is not None:
-            cumulative = float(cumulative)
-            # Monotonic guard: never regress below the highest value we've seen.
-            if cumulative > self._high_water:
-                self._high_water = cumulative
-            self._total = self._high_water
+        self._integrate()
         self.async_write_ha_state()
 
     async def async_update(self) -> None:
